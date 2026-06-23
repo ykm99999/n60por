@@ -1,16 +1,5 @@
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-#
-# File: .github/workflows/openwrt-bulder.yml
-# Description: Build OpenWrt using GitHub Actions
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-
-name: padavanonly-immortalwrt-mt798x-6.6-builder
+# .github/workflows/openwrt-builder-n60por.yml
+name: Build N60 Pro (n60por)
 
 on:
   repository_dispatch:
@@ -19,14 +8,16 @@ on:
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: padavanonly-immortalwrt-mt798x-6.6.config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part5-6.6.sh
+  # 自定义文件路径指向 n60por 目录
+  CUSTOM_DIR: n60por
+  FEEDS_CONF: ${{ github.workspace }}/n60por/feeds.conf.default
+  CONFIG_FILE: ${{ github.workspace }}/n60por/n60por.config
+  DIY_P1_SH: ${{ github.workspace }}/n60por/diy-part1.sh
+  DIY_P2_SH: ${{ github.workspace }}/n60por/diy-part2.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  FIRMWARE_TAG: padavanonly-237-mt798x-6.6
+  FIRMWARE_TAG: n60por-237-mt798x-6.6
   TZ: Asia/Shanghai
 
 jobs:
@@ -60,10 +51,16 @@ jobs:
 
     - name: Load custom feeds
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        # 检查 n60por 目录下的 feeds.conf.default 是否存在
+        if [ -f "$FEEDS_CONF" ]; then
+          cp "$FEEDS_CONF" openwrt/feeds.conf.default
+        fi
+        # 检查 n60por 目录下的 diy-part1.sh 是否存在
+        if [ -f "$DIY_P1_SH" ]; then
+          chmod +x "$DIY_P1_SH"
+          cd openwrt
+          "$DIY_P1_SH"
+        fi
 
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
@@ -73,11 +70,20 @@ jobs:
 
     - name: Load custom configuration
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        # 检查 n60por 目录下的 files 文件夹
+        if [ -d "${{ github.workspace }}/n60por/files" ]; then
+          cp -r "${{ github.workspace }}/n60por/files" openwrt/
+        fi
+        # 复制配置文件
+        if [ -f "$CONFIG_FILE" ]; then
+          cp "$CONFIG_FILE" openwrt/.config
+        fi
+        # 检查 n60por 目录下的 diy-part2.sh
+        if [ -f "$DIY_P2_SH" ]; then
+          chmod +x "$DIY_P2_SH"
+          cd openwrt
+          "$DIY_P2_SH"
+        fi
 
     - name: Download package
       id: package
@@ -132,7 +138,6 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${{ env.FIRMWARE_TAG }}" >> $GITHUB_OUTPUT
         touch release.txt
-        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
