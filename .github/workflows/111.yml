@@ -2,15 +2,11 @@
 name: Build N60 Pro (n60por)
 
 on:
-  repository_dispatch:
   workflow_dispatch:
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
-  CUSTOM_DIR: n60por
-  CONFIG_FILE: ${{ github.workspace }}/n60por/n60por.config
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   FIRMWARE_TAG: n60por-237-mt798x-6.6
@@ -51,11 +47,18 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Load custom configuration and force N60 Pro target
+    - name: Load custom config
       run: |
         cd openwrt
-        # 复制配置文件
-        cp "$CONFIG_FILE" .config || true
+        # 配置文件路径修正
+        CONFIG_PATH="$GITHUB_WORKSPACE/n60por/padavanonly-immortalwrt-mt798x-6.6.config"
+        if [ -f "$CONFIG_PATH" ]; then
+          cp "$CONFIG_PATH" .config
+          echo "✅ Config copied from $CONFIG_PATH"
+        else
+          echo "❌ Config not found: $CONFIG_PATH"
+          exit 1
+        fi
         
         # 强制清理 x86 残留
         sed -i '/CONFIG_TARGET_x86/d' .config
@@ -65,7 +68,7 @@ jobs:
         sed -i '/CONFIG_X86/d' .config
         sed -i '/CONFIG_64BIT/d' .config
         
-        # 强制设置为 N60 Pro 目标
+        # 强制设置为 N60 Pro
         echo "CONFIG_TARGET_mediatek=y" >> .config
         echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
         echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_netcore_n60-pro=y" >> .config
@@ -74,14 +77,11 @@ jobs:
         make defconfig
 
     - name: Download package
-      id: package
       run: |
         cd openwrt
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile the firmware
+    - name: Compile firmware
       id: compile
       run: |
         cd openwrt
@@ -100,17 +100,18 @@ jobs:
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        # 找到固件目录（固定路径）
-        FIRMWARE_DIR="openwrt/bin/targets/mediatek/filogic"
+        FIRMWARE_DIR="$GITHUB_WORKSPACE/openwrt/bin/targets/mediatek/filogic"
         if [ ! -d "$FIRMWARE_DIR" ]; then
           echo "❌ Firmware directory not found: $FIRMWARE_DIR"
+          echo "Checking available directories..."
+          find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type d 2>/dev/null || echo "No targets dir found"
           exit 1
         fi
-        cd $FIRMWARE_DIR
+        cd "$FIRMWARE_DIR"
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
-        echo "✅ Firmware directory: $PWD"
+        ls -la "$PWD"
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
