@@ -47,35 +47,38 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Load custom config
+    - name: Load and fix custom config
       run: |
         cd openwrt
-        CONFIG_PATH="$GITHUB_WORKSPACE/n60por/padavanonly-immortalwrt-mt798x-6.6.config"
-        if [ -f "$CONFIG_PATH" ]; then
-          cp "$CONFIG_PATH" .config
-          echo "✅ Config copied from $CONFIG_PATH"
+        
+        # 1. 复制用户配置（使用相对路径，避免重复）
+        CONFIG_FILE="n60por/padavanonly-immortalwrt-mt798x-6.6.config"
+        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+          echo "✅ Config copied from $CONFIG_FILE"
         else
-          echo "❌ Config not found: $CONFIG_PATH"
-          exit 1
+          # 如果用户配置不存在，从上游模板复制
+          echo "⚠️ User config not found, using upstream default"
+          cp defconfig/nx60pro-ipailna-high-power.config .config
         fi
         
-        # 强制清理 x86 残留
-        sed -i '/CONFIG_TARGET_x86/d' .config
-        sed -i '/CONFIG_TARGET_x86_64/d' .config
+        # 2. 修复常见语法错误：删除行首空白、Tab、Windows换行符
+        sed -i 's/^[ \t]*//; s/\r$//' .config
+        
+        # 3. 确保目标平台唯一且正确（删除所有旧的 TARGET 定义，重新写入）
+        sed -i '/^CONFIG_TARGET_/d' .config
+        cat >> .config << 'EOF'
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_filogic=y
+CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_netcore_n60-pro=y
+# CONFIG_TARGET_MULTI_PROFILE is not set
+EOF
+        
+        # 4. 强制清理任何残留的 x86 配置
+        sed -i '/CONFIG_x86/d' .config
         sed -i '/CONFIG_M686/d' .config
-        sed -i '/CONFIG_CPU_SUP_INTEL/d' .config
-        sed -i '/CONFIG_X86/d' .config
-        sed -i '/CONFIG_64BIT/d' .config
         
-        # 强制设置为 N60 Pro
-        echo "CONFIG_TARGET_mediatek=y" >> .config
-        echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_netcore_n60-pro=y" >> .config
-        sed -i 's/^CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/g' .config
-        
-        echo "=== 最终 .config 目标配置 ==="
-        grep '^CONFIG_TARGET' .config
-        
+        # 5. 重新生成配置
         make defconfig
 
     - name: Download package
@@ -85,7 +88,7 @@ jobs:
 
     - name: Compile firmware
       id: compile
-      continue-on-error: true   # 允许继续执行但记录状态
+      continue-on-error: true
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
@@ -96,23 +99,24 @@ jobs:
       if: env.COMPILE_STATUS != 'success'
       run: |
         echo "❌ 编译失败！"
-        echo "请检查上方日志中的错误信息。"
+        echo "请查看上方日志中的错误信息。"
         exit 1
 
-    - name: Check firmware directory
-      id: check_firmware
+    - name: Get firmware path
+      id: firmware_path
       if: env.COMPILE_STATUS == 'success'
       run: |
         FIRMWARE_DIR="$GITHUB_WORKSPACE/openwrt/bin/targets/mediatek/filogic"
         if [ -d "$FIRMWARE_DIR" ]; then
-          echo "✅ Firmware directory found: $FIRMWARE_DIR"
-          echo "FIRMWARE=$FIRMWARE_DIR" >> $GITHUB_ENV
+          echo "FIRMWARE_DIR=$FIRMWARE_DIR" >> $GITHUB_ENV
           echo "FIRMWARE_EXISTS=true" >> $GITHUB_ENV
+          echo "✅ Firmware directory found: $FIRMWARE_DIR"
         else
           echo "❌ Firmware directory not found: $FIRMWARE_DIR"
-          echo "Checking available directories..."
-          find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type d 2>/dev/null || echo "⚠️ No targets dir found - 编译未成功"
+          echo "Available directories:"
+          find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type d 2>/dev/null || echo "No targets"
           echo "FIRMWARE_EXISTS=false" >> $GITHUB_ENV
+          exit 1
         fi
 
     - name: Get device name
@@ -120,25 +124,24 @@ jobs:
       if: env.FIRMWARE_EXISTS == 'true'
       run: |
         cd openwrt
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        DEVICE=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | head -1)
+        [ -n "$DEVICE" ] && echo "DEVICE_NAME=_$DEVICE" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Organize files
-      id: organize
       if: env.FIRMWARE_EXISTS == 'true'
       run: |
-        cd ${{ env.FIRMWARE }}
+        cd ${{ env.FIRMWARE_DIR }}
         rm -rf packages
         echo "✅ Firmware files:"
         ls -la
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
-      if: env.FIRMWARE_EXISTS == 'true' && !cancelled()
+      if: env.FIRMWARE_EXISTS == 'true'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        path: ${{ env.FIRMWARE_DIR }}
 
     - name: Generate release tag
       id: tag
@@ -146,7 +149,6 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${{ env.FIRMWARE_TAG }}" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@master
@@ -156,7 +158,7 @@ jobs:
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        files: ${{ env.FIRMWARE_DIR }}/*
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
