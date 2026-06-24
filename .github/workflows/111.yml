@@ -57,8 +57,7 @@ jobs:
         # 复制配置文件
         cp "$CONFIG_FILE" .config || true
         
-        # ========== 关键修复：强制清理 x86 残留 ==========
-        # 删除所有 x86 相关配置
+        # 强制清理 x86 残留
         sed -i '/CONFIG_TARGET_x86/d' .config
         sed -i '/CONFIG_TARGET_x86_64/d' .config
         sed -i '/CONFIG_M686/d' .config
@@ -70,10 +69,8 @@ jobs:
         echo "CONFIG_TARGET_mediatek=y" >> .config
         echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
         echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_netcore_n60-pro=y" >> .config
-        # 禁用多设备编译（避免触发其他平台）
         sed -i 's/^CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/g' .config
         
-        # 重新生成配置
         make defconfig
 
     - name: Download package
@@ -103,10 +100,17 @@ jobs:
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
+        # 找到固件目录（固定路径）
+        FIRMWARE_DIR="openwrt/bin/targets/mediatek/filogic"
+        if [ ! -d "$FIRMWARE_DIR" ]; then
+          echo "❌ Firmware directory not found: $FIRMWARE_DIR"
+          exit 1
+        fi
+        cd $FIRMWARE_DIR
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
+        echo "✅ Firmware directory: $PWD"
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
