@@ -47,38 +47,61 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Load and fix custom config
+    - name: Generate clean config
       run: |
         cd openwrt
         
-        # 1. 复制用户配置（使用相对路径，避免重复）
-        CONFIG_FILE="n60por/padavanonly-immortalwrt-mt798x-6.6.config"
-        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
-          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
-          echo "✅ Config copied from $CONFIG_FILE"
-        else
-          # 如果用户配置不存在，从上游模板复制
-          echo "⚠️ User config not found, using upstream default"
+        # 使用上游已验证的模板
+        if [ -f "defconfig/nx60pro-ipailna-high-power.config" ]; then
           cp defconfig/nx60pro-ipailna-high-power.config .config
+          echo "✅ 使用上游模板: nx60pro-ipailna-high-power.config"
+        else
+          make defconfig
         fi
         
-        # 2. 修复常见语法错误：删除行首空白、Tab、Windows换行符
-        sed -i 's/^[ \t]*//; s/\r$//' .config
-        
-        # 3. 确保目标平台唯一且正确（删除所有旧的 TARGET 定义，重新写入）
-        sed -i '/^CONFIG_TARGET_/d' .config
-        cat >> .config << 'EOF'
-CONFIG_TARGET_mediatek=y
-CONFIG_TARGET_mediatek_filogic=y
-CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_netcore_n60-pro=y
-# CONFIG_TARGET_MULTI_PROFILE is not set
-EOF
-        
-        # 4. 强制清理任何残留的 x86 配置
+        # 修复换行符和行首空白
+        sed -i 's/\r$//' .config
+        sed -i 's/^[ \t]*//' .config
         sed -i '/CONFIG_x86/d' .config
         sed -i '/CONFIG_M686/d' .config
         
-        # 5. 重新生成配置
+        # ===== 添加 Docker + SSR Plus+ （逐行 echo，禁用 EOF） =====
+        echo "CONFIG_PACKAGE_kmod-cgroup-cpu=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cgroup-cpuset=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cgroup-freezer=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cgroup-memory=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-veth=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-br-netfilter=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-overlay=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-crc32c=y" >> .config
+        echo "CONFIG_PACKAGE_cgroupfs-mount=y" >> .config
+        echo "CONFIG_PACKAGE_docker-ce=y" >> .config
+        echo "CONFIG_PACKAGE_dockerd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
+        echo "CONFIG_PACKAGE_docker-compose=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ssr-plus=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y" >> .config
+        echo "CONFIG_PACKAGE_xray-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nft-socket=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-tproxy=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
+        echo "CONFIG_PACKAGE_ipset=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        echo "CONFIG_PACKAGE_libopenssl=y" >> .config
+        echo "CONFIG_PACKAGE_libmbedtls=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc-mtk=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-turboacc-mtk-zh-cn=y" >> .config
+        echo "CONFIG_MTK_WHNAT_SUPPORT=m" >> .config
+        echo "CONFIG_MTK_WARP_V2=y" >> .config
+        
+        echo "=== 目标配置确认 ==="
+        grep '^CONFIG_TARGET' .config
+        grep '^CONFIG_PACKAGE_docker' .config | head -2
+        grep '^CONFIG_PACKAGE_luci-app-ssr-plus' .config
+        
         make defconfig
 
     - name: Download package
@@ -91,7 +114,7 @@ EOF
       continue-on-error: true
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
+        echo "开始编译..."
         make -j$(nproc) V=s
         echo "COMPILE_STATUS=success" >> $GITHUB_ENV
 
@@ -99,7 +122,6 @@ EOF
       if: env.COMPILE_STATUS != 'success'
       run: |
         echo "❌ 编译失败！"
-        echo "请查看上方日志中的错误信息。"
         exit 1
 
     - name: Get firmware path
@@ -110,12 +132,9 @@ EOF
         if [ -d "$FIRMWARE_DIR" ]; then
           echo "FIRMWARE_DIR=$FIRMWARE_DIR" >> $GITHUB_ENV
           echo "FIRMWARE_EXISTS=true" >> $GITHUB_ENV
-          echo "✅ Firmware directory found: $FIRMWARE_DIR"
+          echo "✅ 固件目录: $FIRMWARE_DIR"
         else
-          echo "❌ Firmware directory not found: $FIRMWARE_DIR"
-          echo "Available directories:"
-          find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type d 2>/dev/null || echo "No targets"
-          echo "FIRMWARE_EXISTS=false" >> $GITHUB_ENV
+          echo "❌ 固件目录不存在"
           exit 1
         fi
 
@@ -133,7 +152,7 @@ EOF
       run: |
         cd ${{ env.FIRMWARE_DIR }}
         rm -rf packages
-        echo "✅ Firmware files:"
+        echo "✅ 固件文件:"
         ls -la
 
     - name: Upload firmware directory
