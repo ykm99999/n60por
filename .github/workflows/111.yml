@@ -8,12 +8,8 @@ on:
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
-  # 自定义文件路径指向 n60por 目录
   CUSTOM_DIR: n60por
-  FEEDS_CONF: ${{ github.workspace }}/n60por/feeds.conf.default
   CONFIG_FILE: ${{ github.workspace }}/n60por/n60por.config
-  DIY_P1_SH: ${{ github.workspace }}/n60por/diy-part1.sh
-  DIY_P2_SH: ${{ github.workspace }}/n60por/diy-part2.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
@@ -49,47 +45,41 @@ jobs:
         git clone -b $REPO_BRANCH --single-branch --filter=blob:none $REPO_URL openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Load custom feeds
-      run: |
-        # 检查 n60por 目录下的 feeds.conf.default 是否存在
-        if [ -f "$FEEDS_CONF" ]; then
-          cp "$FEEDS_CONF" openwrt/feeds.conf.default
-        fi
-        # 检查 n60por 目录下的 diy-part1.sh 是否存在
-        if [ -f "$DIY_P1_SH" ]; then
-          chmod +x "$DIY_P1_SH"
-          cd openwrt
-          "$DIY_P1_SH"
-        fi
-
     - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
-
-    - name: Load custom configuration
       run: |
-        # 检查 n60por 目录下的 files 文件夹
-        if [ -d "${{ github.workspace }}/n60por/files" ]; then
-          cp -r "${{ github.workspace }}/n60por/files" openwrt/
-        fi
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Load custom configuration and force N60 Pro target
+      run: |
+        cd openwrt
         # 复制配置文件
-        if [ -f "$CONFIG_FILE" ]; then
-          cp "$CONFIG_FILE" openwrt/.config
-        fi
-        # 检查 n60por 目录下的 diy-part2.sh
-        if [ -f "$DIY_P2_SH" ]; then
-          chmod +x "$DIY_P2_SH"
-          cd openwrt
-          "$DIY_P2_SH"
-        fi
+        cp "$CONFIG_FILE" .config || true
+        
+        # ========== 关键修复：强制清理 x86 残留 ==========
+        # 删除所有 x86 相关配置
+        sed -i '/CONFIG_TARGET_x86/d' .config
+        sed -i '/CONFIG_TARGET_x86_64/d' .config
+        sed -i '/CONFIG_M686/d' .config
+        sed -i '/CONFIG_CPU_SUP_INTEL/d' .config
+        sed -i '/CONFIG_X86/d' .config
+        sed -i '/CONFIG_64BIT/d' .config
+        
+        # 强制设置为 N60 Pro 目标
+        echo "CONFIG_TARGET_mediatek=y" >> .config
+        echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_netcore_n60-pro=y" >> .config
+        # 禁用多设备编译（避免触发其他平台）
+        sed -i 's/^CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/g' .config
+        
+        # 重新生成配置
+        make defconfig
 
     - name: Download package
       id: package
       run: |
         cd openwrt
-        make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -108,13 +98,6 @@ jobs:
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
 
     - name: Organize files
       id: organize
@@ -155,12 +138,3 @@ jobs:
       with:
         retain_days: 0
         keep_minimum_runs: 2
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 6
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
